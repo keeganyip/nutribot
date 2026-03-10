@@ -185,8 +185,77 @@ const DropZone = ({ label, color, preview, onChange, onRemove }) => {
   );
 };
 
+const WeightChart = ({ weightLog }) => {
+  const data = [...weightLog].reverse();
+  if (data.length < 2) return (
+    <div style={{ textAlign: "center", padding: "14px 0", fontSize: 9, color: "#1e1e1e", fontFamily: "'Space Mono', monospace", letterSpacing: 1 }}>LOG 2+ ENTRIES TO SEE CHART</div>
+  );
+
+  const W = 220, H = 90;
+  const PAD = { top: 12, right: 10, bottom: 22, left: 30 };
+  const innerW = W - PAD.left - PAD.right;
+  const innerH = H - PAD.top - PAD.bottom;
+
+  const weights = data.map(d => d.kg);
+  const minKg = Math.min(...weights);
+  const maxKg = Math.max(...weights);
+  const range = maxKg - minKg || 1;
+
+  const xs = data.map((_, i) => PAD.left + (i / Math.max(data.length - 1, 1)) * innerW);
+  const ys = data.map(d => PAD.top + (1 - (d.kg - minKg) / range) * innerH);
+  const linePts = xs.map((x, i) => `${x},${ys[i]}`).join(" ");
+  const areaPts = `${xs[0]},${PAD.top + innerH} ${linePts} ${xs[xs.length - 1]},${PAD.top + innerH}`;
+  const midKg = ((minKg + maxKg) / 2).toFixed(1);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block", overflow: "visible" }}>
+      <defs>
+        <linearGradient id="wgrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#c8f564" stopOpacity="0.18" />
+          <stop offset="100%" stopColor="#c8f564" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+
+      {/* horizontal grid */}
+      {[0, 0.5, 1].map((t, i) => (
+        <line key={i} x1={PAD.left} y1={PAD.top + t * innerH} x2={PAD.left + innerW} y2={PAD.top + t * innerH}
+          stroke="#141414" strokeWidth="1" strokeDasharray={t === 0.5 ? "3,3" : "0"} />
+      ))}
+
+      {/* y-axis labels */}
+      {[[maxKg, 0], [midKg, 0.5], [minKg, 1]].map(([label, t], i) => (
+        <text key={i} x={PAD.left - 4} y={PAD.top + t * innerH + 3}
+          fill="#333" fontSize="7" textAnchor="end" fontFamily="monospace">{label}</text>
+      ))}
+
+      {/* area fill */}
+      <polygon points={areaPts} fill="url(#wgrad)" />
+
+      {/* line */}
+      <polyline points={linePts} fill="none" stroke="#c8f564" strokeWidth="1.5"
+        strokeLinejoin="round" strokeLinecap="round"
+        style={{ filter: "drop-shadow(0 0 3px #c8f564aa)" }} />
+
+      {/* dots */}
+      {xs.map((x, i) => (
+        <circle key={i} cx={x} cy={ys[i]} r="2.5" fill="#c8f564" stroke="#0d0d0d" strokeWidth="1.5" />
+      ))}
+
+      {/* x-axis: first + last dates */}
+      <text x={xs[0]} y={H - 4} fill="#2a2a2a" fontSize="7" textAnchor="middle" fontFamily="monospace">{data[0].date}</text>
+      {data.length > 1 && (
+        <text x={xs[xs.length - 1]} y={H - 4} fill="#2a2a2a" fontSize="7" textAnchor="middle" fontFamily="monospace">{data[data.length - 1].date}</text>
+      )}
+    </svg>
+  );
+};
+
+const loadLS = (key, fallback) => { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+
 export default function NutritionAgent() {
-  const [currentWeightKg, setCurrentWeightKg] = useState(48);
+  const [currentWeightKg, setCurrentWeightKg] = useState(() => loadLS("nb_weight", 48));
+  const [draftWeight, setDraftWeight] = useState(() => loadLS("nb_weight", 48));
+  const [weightLog, setWeightLog] = useState(() => loadLS("nb_weightLog", [{ kg: 48, date: new Date().toLocaleDateString(), note: "Starting weight" }]));
   const [messages, setMessages] = useState([
     { role: "assistant", content: "Yo. I'm your vision-powered nutrition agent. You're starting at 48kg in gain mode. Add a meal first (before photo), then edit later with an after photo if you didn't finish. 📸💪" }
   ]);
@@ -207,9 +276,22 @@ export default function NutritionAgent() {
 
   const totals = aggregateTotals(mealLog);
 
+  useEffect(() => { localStorage.setItem("nb_weight", JSON.stringify(currentWeightKg)); }, [currentWeightKg]);
+  useEffect(() => { localStorage.setItem("nb_weightLog", JSON.stringify(weightLog)); }, [weightLog]);
+
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [messages, loading]);
+
+  const logWeight = () => {
+    const kg = Number(draftWeight);
+    if (!kg || kg < 20 || kg > 300) return;
+    setCurrentWeightKg(kg);
+    setWeightLog((prev) => [
+      { kg, date: new Date().toLocaleDateString(), note: kg > prev[prev.length - 1]?.kg ? "↑ gained" : kg < prev[prev.length - 1]?.kg ? "↓ lost" : "→ same" },
+      ...prev
+    ]);
+  };
 
   const handleBeforeImg = (file) => { setBeforeFile(file); setBeforePreview(URL.createObjectURL(file)); };
   const handleAfterImg = (file) => { setAfterFile(file); setAfterPreview(URL.createObjectURL(file)); };
@@ -426,20 +508,51 @@ export default function NutritionAgent() {
 
           <div style={{ background: "#0d0d0d", border: "1px solid #1a1a1a", borderRadius: 8, padding: 14 }}>
             <div style={{ fontSize: 9, letterSpacing: 3, color: "#333", marginBottom: 10, textTransform: "uppercase" }}>GAIN PROFILE</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+
+            {/* Weight entry row */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
               <span style={{ fontSize: 13 }}>⚖️</span>
-              <span style={{ fontSize: 9, color: "#666" }}>Current weight:</span>
               <input
                 type="number"
-                min="30"
-                max="200"
-                value={currentWeightKg}
-                onChange={(e) => setCurrentWeightKg(Number(e.target.value) || 48)}
+                min="20"
+                max="300"
+                value={draftWeight}
+                onChange={(e) => setDraftWeight(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && logWeight()}
                 style={{ width: 56, background: "#0a0a0a", border: "1px solid #1e1e1e", color: "#c8f564", fontFamily: "'Space Mono', monospace", fontSize: 10, padding: "3px 5px", borderRadius: 3, outline: "none" }}
               />
               <span style={{ fontSize: 9, color: "#444" }}>kg</span>
+              <button
+                onClick={logWeight}
+                style={{ marginLeft: "auto", background: "#c8f56422", border: "1px solid #c8f56444", color: "#c8f564", fontFamily: "'Space Mono', monospace", fontSize: 8, letterSpacing: 1, padding: "4px 7px", borderRadius: 3, cursor: "pointer" }}
+              >LOG</button>
             </div>
-            <div style={{ fontSize: 9, color: "#444", fontFamily: "'Space Mono', monospace" }}>Mode: healthy weight gain from {currentWeightKg}kg</div>
+
+            <div style={{ fontSize: 9, color: "#333", fontFamily: "'Space Mono', monospace", marginBottom: 10 }}>
+              Current: <span style={{ color: "#c8f564" }}>{currentWeightKg}kg</span>
+              {weightLog.length > 1 && (
+                <span style={{ color: currentWeightKg > weightLog[1]?.kg ? "#78ff9b" : currentWeightKg < weightLog[1]?.kg ? "#ff6b6b" : "#444", marginLeft: 6 }}>
+                  ({currentWeightKg > weightLog[1]?.kg ? "+" : ""}{(currentWeightKg - weightLog[1]?.kg).toFixed(1)}kg vs last)
+                </span>
+              )}
+            </div>
+
+            {/* Weight chart */}
+            <div style={{ marginBottom: 10 }}>
+              <WeightChart weightLog={weightLog} />
+            </div>
+
+            {/* Weight history */}
+            <div style={{ fontSize: 9, letterSpacing: 2, color: "#222", marginBottom: 6, textTransform: "uppercase" }}>History</div>
+            <div style={{ maxHeight: 120, overflowY: "auto" }}>
+              {weightLog.map((entry, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #141414" }}>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 9, color: i === 0 ? "#c8f564" : "#555" }}>{entry.kg}kg</span>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 8, color: entry.note?.includes("↑") ? "#78ff9b" : entry.note?.includes("↓") ? "#ff6b6b" : "#333" }}>{entry.note}</span>
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 8, color: "#2a2a2a" }}>{entry.date}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div style={{ background: "#0d0d0d", border: "1px solid #1a1a1a", borderRadius: 8, padding: 14 }}>
